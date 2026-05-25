@@ -156,14 +156,23 @@ public:
       "green/obstacles",
       markers_qos_);
 
-    // --- CSV logging ---
+    // --- CSV baseline logging ---
     csv_file_.open("/tmp/ekf_baseline.csv");
     csv_file_ << std::fixed << std::setprecision(6);
     csv_file_ << "iteracion,timestamp,theta,x,y,"
               << "sigma_theta,sigma_x,sigma_y,"
               << "lm0_x,lm0_y,lm1_x,lm1_y,"
               << "z_diff_range,z_diff_bearing\n";
-    RCLCPP_INFO(get_logger(), "CSV logging iniciado en /tmp/ekf_baseline.csv");
+
+    // --- CSV profiling logging ---
+    prof_file_.open("/tmp/ekf_profiling.csv");
+    prof_file_ << std::fixed << std::setprecision(3);
+    prof_file_ << "iteracion,timestamp,"
+               << "t_prediccion_us,t_update_us,t_callback_total_us,"
+               << "n_landmarks_visibles\n";
+
+    RCLCPP_INFO(get_logger(), "CSV baseline: /tmp/ekf_baseline.csv");
+    RCLCPP_INFO(get_logger(), "CSV profiling: /tmp/ekf_profiling.csv");
 
   }
 
@@ -189,6 +198,9 @@ private:
 
   void fake_sensor_cb(const visualization_msgs::msg::MarkerArray & msg)
   {
+    // --- timer callback total ---
+    auto t_cb_start = std::chrono::high_resolution_clock::now();
+
     fake_sensor_data_ = msg;
 
     auto current_configuration = t_map_odom * t_odom_robot;
@@ -205,48 +217,47 @@ private:
     At(1, 0) = -dy;
     At(2, 0) = dx;
 
+    // --- timer prediccion ---
+    auto t_pred_start = std::chrono::high_resolution_clock::now();
     sigma = At * sigma * At.t() + q_bar;
+    auto t_pred_end = std::chrono::high_resolution_clock::now();
+    double t_prediccion_us = std::chrono::duration<double, std::micro>(
+      t_pred_end - t_pred_start).count();
 
     // iterate over the measurements
-    for (size_t i = 0; i < fake_sensor_data_.markers.size(); i++) {
-      // grab the marker
-      auto marker = fake_sensor_data_.markers.at(i);
-      // if the marker is not in delete
-      if (marker.action != visualization_msgs::msg::Marker::DELETE) {
+    double t_update_total_us = 0.0;
+    int n_landmarks_visibles = 0;
 
-        // eqs 11, 12
+    for (size_t i = 0; i < fake_sensor_data_.markers.size(); i++) {
+      auto marker = fake_sensor_data_.markers.at(i);
+      if (marker.action != visualization_msgs::msg::Marker::DELETE) {
+        n_landmarks_visibles++;
+
         auto meas_range =
-          std::sqrt(std::pow(marker.pose.position.x, 2) + std::pow(marker.pose.position.y, 2));                   // the marker is in relative x,y already
+          std::sqrt(std::pow(marker.pose.position.x, 2) + std::pow(marker.pose.position.y, 2));
         auto meas_bearing = std::atan2(marker.pose.position.y, marker.pose.position.x);
 
-        // initialize the marker in the state if we haven't seen it
         if (state(3 + marker.id * 2) == 0.0 && state(3 + marker.id * 2 + 1) == 0.0) {
           state(3 + marker.id * 2) = state(1) + meas_range * std::cos(meas_bearing + state(0));
           state(3 + marker.id * 2 + 1) = state(2) + meas_range * std::sin(meas_bearing + state(0));
         }
 
-        // estimated measurement eq 14
         auto est_range = std::sqrt(
           std::pow(state(3 + marker.id * 2) - state(1), 2) +
-          std::pow(state(3 + marker.id * 2 + 1) - state(2), 2)
-        );
+          std::pow(state(3 + marker.id * 2 + 1) - state(2), 2));
         auto est_bearing =
+          turtlelib::normalize_angle(
           std::atan2(
-          state(3 + marker.id * 2 + 1) - state(2),
-          state(3 + marker.id * 2) - state(1)) - state(0);
-        est_bearing = turtlelib::normalize_angle(est_bearing);
+            state(3 + marker.id * 2 + 1) - state(2),
+            state(3 + marker.id * 2) - state(1)) - state(0));
 
-        // eq 25
         arma::vec z = {meas_range, meas_bearing};
         arma::vec z_hat = {est_range, est_bearing};
 
-        // eqs 16, 17
         auto delta_x = state(3 + marker.id * 2) - state(1);
         auto delta_y = state(3 + marker.id * 2 + 1) - state(2);
-
         auto d = delta_x * delta_x + delta_y * delta_y;
 
-        // eqn 18
         arma::mat Hj = arma::mat(2, 2 * n_landmarks + 3, arma::fill::zeros);
         Hj(0, 1) = -delta_x / std::sqrt(d);
         Hj(0, 2) = -delta_y / std::sqrt(d);
@@ -258,47 +269,58 @@ private:
         Hj(1, 3 + 2 * marker.id) = -delta_y / d;
         Hj(1, 3 + 2 * marker.id + 1) = delta_x / d;
 
-        // eq 26
+        // --- timer update ---
+        auto t_upd_start = std::chrono::high_resolution_clock::now();
+
         arma::mat K = sigma * Hj.t() * arma::inv(Hj * sigma * Hj.t() + R);
 
-        // eq 27
         arma::vec z_diff = z - z_hat;
         z_diff(1) = turtlelib::normalize_angle(z_diff(1));
 
-        // RCLCPP_INFO_STREAM(get_logger(), "k * zdiff: "<< K*z_diff <<std::endl);
-        //RCLCPP_INFO_STREAM(get_logger(), "z diff size: "<< z_diff <<std::endl);
-
         state = state + K * z_diff;
-
-        // eq 28
-        sigma =
-          (arma::mat(2 * n_landmarks + 3, 2 * n_landmarks + 3, arma::fill::eye) - K * Hj) * sigma;
-
+        sigma = (arma::mat(2 * n_landmarks + 3, 2 * n_landmarks + 3, arma::fill::eye) - K * Hj) * sigma;
         state(0) = turtlelib::normalize_angle(state(0));
 
-        // --- CSV: escribir fila por cada update de landmark ---
+        auto t_upd_end = std::chrono::high_resolution_clock::now();
+        t_update_total_us += std::chrono::duration<double, std::micro>(
+          t_upd_end - t_upd_start).count();
+
+        // --- CSV baseline ---
         double lm0_x = state(3);
         double lm0_y = state(4);
         double lm1_x = (2 * n_landmarks + 3 > 5) ? state(5) : 0.0;
         double lm1_y = (2 * n_landmarks + 3 > 6) ? state(6) : 0.0;
 
-        csv_file_ << ekf_iteration_   << ","
+        csv_file_ << ekf_iteration_          << ","
                   << get_clock()->now().seconds() << ","
-                  << state(0)         << ","   // theta
-                  << state(1)         << ","   // x
-                  << state(2)         << ","   // y
-                  << sigma(0, 0)      << ","   // sigma_theta
-                  << sigma(1, 1)      << ","   // sigma_x
-                  << sigma(2, 2)      << ","   // sigma_y
-                  << lm0_x            << ","
-                  << lm0_y            << ","
-                  << lm1_x            << ","
-                  << lm1_y            << ","
-                  << z_diff(0)        << ","   // z_diff_range
-                  << z_diff(1)        << "\n"; // z_diff_bearing
+                  << state(0)               << ","
+                  << state(1)               << ","
+                  << state(2)               << ","
+                  << sigma(0, 0)            << ","
+                  << sigma(1, 1)            << ","
+                  << sigma(2, 2)            << ","
+                  << lm0_x                  << ","
+                  << lm0_y                  << ","
+                  << lm1_x                  << ","
+                  << lm1_y                  << ","
+                  << z_diff(0)              << ","
+                  << z_diff(1)              << "\n";
         ekf_iteration_++;
       }
     }
+
+    // --- timer callback total fin ---
+    auto t_cb_end = std::chrono::high_resolution_clock::now();
+    double t_callback_total_us = std::chrono::duration<double, std::micro>(
+      t_cb_end - t_cb_start).count();
+
+    // --- CSV profiling ---
+    prof_file_ << ekf_iteration_            << ","
+               << get_clock()->now().seconds()  << ","
+               << t_prediccion_us           << ","
+               << t_update_total_us         << ","
+               << t_callback_total_us       << ","
+               << n_landmarks_visibles      << "\n";
 
     turtlelib::Transform2D filter_configuration =
       turtlelib::Transform2D{{state(1), state(2)}, state(0)};
@@ -708,6 +730,7 @@ private:
 
   // --- CSV logging ---
   std::ofstream csv_file_;
+  std::ofstream prof_file_;
   uint64_t ekf_iteration_{0};
 
 public:
@@ -716,8 +739,12 @@ public:
     if (csv_file_.is_open()) {
       csv_file_.flush();
       csv_file_.close();
-      RCLCPP_INFO(get_logger(), "CSV cerrado correctamente.");
     }
+    if (prof_file_.is_open()) {
+      prof_file_.flush();
+      prof_file_.close();
+    }
+    RCLCPP_INFO(get_logger(), "CSVs cerrados correctamente.");
   }
 };
 
