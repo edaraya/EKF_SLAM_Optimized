@@ -7,11 +7,7 @@
 # Uso:
 #   ./compare_results.py --armadillo results/DIR_armadillo/ \
 #                        --fpga      results/DIR_fpga/
-<<<<<<< HEAD
 #   ./compare_results.py --auto-latest
-=======
-#   ./compare_results.py --auto-latest         # toma las 2 mas recientes
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
 #
 # Solo usa la libreria estandar (no requiere pandas).
 
@@ -19,18 +15,10 @@ import argparse
 import csv
 import glob
 import os
-<<<<<<< HEAD
-=======
-import re
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
 import sys
 
 
 def read_summary(results_dir, mode):
-<<<<<<< HEAD
-=======
-    """Lee el CSV de resumen (una fila) del slam."""
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     path = os.path.join(results_dir, f"results_{mode}_summary.csv")
     if not os.path.exists(path):
         print(f"[WARN] no existe {path}")
@@ -40,7 +28,6 @@ def read_summary(results_dir, mode):
     return rows[0] if rows else {}
 
 
-<<<<<<< HEAD
 def parse_power_cpu(results_dir, mode):
     """Lee el CSV de xmutil: potencia (mW) y CPU (%) promedio + energia."""
     path = os.path.join(results_dir, f"results_{mode}_power.csv")
@@ -70,52 +57,6 @@ def parse_power_cpu(results_dir, mode):
             dur = ts[-1] - ts[0]
             out["duration_s"] = dur
             out["energy_j"] = avg_w * dur
-=======
-def parse_perf(results_dir, mode):
-    """Extrae metricas clave del archivo de perf."""
-    path = os.path.join(results_dir, f"results_{mode}_perf.txt")
-    out = {"cpus_utilized": None, "seconds_elapsed": None,
-           "instructions": None, "cache_misses": None}
-    if not os.path.exists(path):
-        return out
-    txt = open(path).read()
-
-    m = re.search(r"([\d.]+)\s+CPUs utilized", txt)
-    if m:
-        out["cpus_utilized"] = float(m.group(1))
-    m = re.search(r"([\d.]+)\s+seconds time elapsed", txt)
-    if m:
-        out["seconds_elapsed"] = float(m.group(1))
-    m = re.search(r"([\d,]+)\s+instructions", txt)
-    if m:
-        out["instructions"] = int(m.group(1).replace(",", ""))
-    m = re.search(r"([\d,]+)\s+cache-misses", txt)
-    if m:
-        out["cache_misses"] = int(m.group(1).replace(",", ""))
-    return out
-
-
-def parse_power(results_dir, mode):
-    """Calcula potencia promedio y energia total del CSV de potencia."""
-    path = os.path.join(results_dir, f"results_{mode}_power.csv")
-    out = {"avg_power_w": None, "duration_s": None, "energy_j": None}
-    if not os.path.exists(path):
-        return out
-    ts, totals = [], []
-    with open(path) as f:
-        for row in csv.DictReader(f):
-            try:
-                ts.append(float(row["timestamp"]))
-                totals.append(float(row["total_power_w"]))
-            except (ValueError, KeyError):
-                continue
-    if len(totals) >= 2:
-        avg = sum(totals) / len(totals)
-        dur = ts[-1] - ts[0]
-        out["avg_power_w"] = avg
-        out["duration_s"] = dur
-        out["energy_j"] = avg * dur
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     return out
 
 
@@ -128,10 +69,6 @@ def fmt(v, nd=3):
 
 
 def winner_lower(a, b):
-<<<<<<< HEAD
-=======
-    """Gana el menor (para tiempos, CPU, potencia, energia)."""
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     if a is None or b is None:
         return "-"
     return "FPGA" if b < a else ("Armadillo" if a < b else "empate")
@@ -146,18 +83,10 @@ def to_float(d, key):
 
 def main():
     ap = argparse.ArgumentParser()
-<<<<<<< HEAD
     ap.add_argument("--armadillo")
     ap.add_argument("--fpga")
     ap.add_argument("--auto-latest", action="store_true")
     ap.add_argument("--output", default=None)
-=======
-    ap.add_argument("--armadillo", help="carpeta de la corrida armadillo")
-    ap.add_argument("--fpga", help="carpeta de la corrida fpga")
-    ap.add_argument("--auto-latest", action="store_true",
-                    help="usar las 2 carpetas mas recientes")
-    ap.add_argument("--output", default=None, help="ruta del CSV de salida")
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     args = ap.parse_args()
 
     base = os.path.expanduser("~/andres.saballo/results")
@@ -166,11 +95,7 @@ def main():
         arma_dirs = sorted(glob.glob(os.path.join(base, "*_armadillo")))
         fpga_dirs = sorted(glob.glob(os.path.join(base, "*_fpga")))
         if not arma_dirs or not fpga_dirs:
-<<<<<<< HEAD
             print("[ERROR] faltan carpetas _armadillo o _fpga en", base)
-=======
-            print("[ERROR] no encontre carpetas _armadillo y _fpga en", base)
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
             sys.exit(1)
         arma_dir, fpga_dir = arma_dirs[-1], fpga_dirs[-1]
     else:
@@ -182,7 +107,6 @@ def main():
     print(f"Armadillo: {arma_dir}")
     print(f"FPGA:      {fpga_dir}\n")
 
-<<<<<<< HEAD
     a_sum = read_summary(arma_dir, "armadillo")
     f_sum = read_summary(fpga_dir, "fpga")
     a_pc = parse_power_cpu(arma_dir, "armadillo")
@@ -191,30 +115,15 @@ def main():
     rows = []
 
     # ── Tiempos de la operacion PHt ──────────────────────────────────────
-=======
-    # Leer datos
-    a_sum = read_summary(arma_dir, "armadillo")
-    f_sum = read_summary(fpga_dir, "fpga")
-    a_perf, f_perf = parse_perf(arma_dir, "armadillo"), parse_perf(fpga_dir, "fpga")
-    a_pow, f_pow = parse_power(arma_dir, "armadillo"), parse_power(fpga_dir, "fpga")
-
-    rows = []
-
-    # ── Tiempos ──────────────────────────────────────────────────────────
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     a_op = to_float(a_sum, "avg_op_us")
     f_op = to_float(f_sum, "avg_op_us")
     speedup = (a_op / f_op) if (a_op and f_op) else None
     rows.append(["avg_op_us", fmt(a_op), fmt(f_op), winner_lower(a_op, f_op),
                  f"{speedup:.2f}x mas rapido FPGA" if speedup else "-"])
-<<<<<<< HEAD
     rows.append(["min_op_us", fmt(to_float(a_sum, "min_op_us")),
                  fmt(to_float(f_sum, "min_op_us")),
                  winner_lower(to_float(a_sum, "min_op_us"),
                               to_float(f_sum, "min_op_us")), "-"])
-=======
-
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     rows.append(["avg_kernel_us", "N/A", fmt(to_float(f_sum, "avg_kernel_us")),
                  "-", "solo FPGA"])
     rows.append(["avg_sync_to_us", "N/A", fmt(to_float(f_sum, "avg_sync_to_us")),
@@ -224,7 +133,6 @@ def main():
     rows.append(["total_iterations", fmt(a_sum.get("total_iterations")),
                  fmt(f_sum.get("total_iterations")), "-", "-"])
 
-<<<<<<< HEAD
     # ── CPU y potencia (xmutil) ──────────────────────────────────────────
     a_cpu, f_cpu = a_pc["avg_cpu_pct"], f_pc["avg_cpu_pct"]
     rows.append(["avg_cpu_pct", fmt(a_cpu), fmt(f_cpu), winner_lower(a_cpu, f_cpu),
@@ -233,22 +141,6 @@ def main():
     rows.append(["avg_power_w", fmt(a_pw), fmt(f_pw), winner_lower(a_pw, f_pw),
                  f"{(a_pw-f_pw):.2f} W menos" if (a_pw and f_pw) else "-"])
     a_e, f_e = a_pc["energy_j"], f_pc["energy_j"]
-=======
-    # ── CPU (perf) ───────────────────────────────────────────────────────
-    a_cpu, f_cpu = a_perf["cpus_utilized"], f_perf["cpus_utilized"]
-    rows.append(["cpus_utilized", fmt(a_cpu), fmt(f_cpu),
-                 winner_lower(a_cpu, f_cpu),
-                 f"{(1-f_cpu/a_cpu)*100:.1f}% menos CPU" if (a_cpu and f_cpu) else "-"])
-    rows.append(["cache_misses", fmt(a_perf["cache_misses"]),
-                 fmt(f_perf["cache_misses"]),
-                 winner_lower(a_perf["cache_misses"], f_perf["cache_misses"]), "-"])
-
-    # ── Potencia / energia ───────────────────────────────────────────────
-    a_pw, f_pw = a_pow["avg_power_w"], f_pow["avg_power_w"]
-    rows.append(["avg_power_w", fmt(a_pw), fmt(f_pw), winner_lower(a_pw, f_pw),
-                 f"{(a_pw-f_pw):.2f} W menos" if (a_pw and f_pw) else "-"])
-    a_e, f_e = a_pow["energy_j"], f_pow["energy_j"]
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     rows.append(["energy_j", fmt(a_e), fmt(f_e), winner_lower(a_e, f_e),
                  f"{(1-f_e/a_e)*100:.1f}% menos energia" if (a_e and f_e) else "-"])
 
@@ -267,18 +159,10 @@ def main():
 
     # ── Imprimir tabla ───────────────────────────────────────────────────
     print(f"{'metrica':<22}{'armadillo':>14}{'fpga':>14}{'ganador':>12}   diferencia")
-<<<<<<< HEAD
     print("-" * 82)
     for r in rows:
         print(f"{r[0]:<22}{r[1]:>14}{r[2]:>14}{r[3]:>12}   {r[4]}")
 
-=======
-    print("-" * 80)
-    for r in rows:
-        print(f"{r[0]:<22}{r[1]:>14}{r[2]:>14}{r[3]:>12}   {r[4]}")
-
-    # ── Guardar CSV ──────────────────────────────────────────────────────
->>>>>>> 0243932aad2d770a28f55130c96e363ad5304d2c
     out_path = args.output or os.path.join(base, "comparison_summary.csv")
     with open(out_path, "w", newline="") as f:
         w = csv.writer(f)
