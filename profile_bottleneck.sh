@@ -1,20 +1,20 @@
 #!/bin/bash
 # profile_bottleneck.sh
 #
-# Captura el PERFIL POR FUNCION del nodo slam con perf record, para
-# identificar el cuello de botella (que funcion/libreria consume el tiempo).
+# Captura el PERFIL POR FUNCION del nodo slam con perf record y genera
+# la vista de ARBOL DE LLAMADAS (call-graph), que es donde se evidencia
+# el cuello de botella del EKF (fake_sensor_cb -> Armadillo -> dgemm).
 #
-# Genera, en la carpeta de resultados:
-#   results_<mode>_perfreport_full.txt   (arbol de llamadas completo)
-#   results_<mode>_perfreport_flat.txt   (lista plana de funciones + %)
-#   results_<mode>_bottleneck.csv        (las funciones clave extraidas)
+# Genera en la carpeta de resultados:
+#   results_<mode>_callgraph.txt    (arbol de llamadas; la vista clave)
+#   results_<mode>_flat.txt         (lista plana por self, complementaria)
+#   results_<mode>_bottleneck.csv   (funciones clave extraidas del arbol)
 #
 # Uso:
 #   ./profile_bottleneck.sh armadillo [segundos]
 #   ./profile_bottleneck.sh fpga [segundos]
-# Por defecto graba 30 segundos.
 #
-# Requiere: sudo sysctl kernel.perf_event_paranoid=-1   (una vez por sesion)
+# Requiere: sudo sysctl kernel.perf_event_paranoid=-1
 
 set -u
 MODE="${1:-}"
@@ -38,12 +38,10 @@ echo " Perfilado de cuello de botella: $MODE  (${SECS}s)"
 echo " Resultados: $RESULTS_DIR"
 echo "=================================================="
 
-# ── Lanzar el SLAM ───────────────────────────────────────────────────────
 echo "[..] Lanzando SLAM..."
 $LAUNCH_CMD > "${RESULTS_DIR}/slam_stdout.log" 2>&1 &
 LAUNCH_PID=$!
 
-# ── Esperar al nodo slam ─────────────────────────────────────────────────
 echo "[..] Esperando al nodo slam..."
 SLAM_PID=""
 for i in $(seq 1 15); do
@@ -59,42 +57,56 @@ if [ -z "$SLAM_PID" ]; then
 fi
 echo "[ok] Nodo slam (PID $SLAM_PID). Grabando ${SECS}s con perf record..."
 
-# ── perf record (call-graph) ─────────────────────────────────────────────
 DATA="${RESULTS_DIR}/perf.data"
-perf record -g -p "$SLAM_PID" -o "$DATA" -- sleep "$SECS"
+# -g  : habilita call-graph (arbol de llamadas)
+# --call-graph dwarf : mejor reconstruccion del arbol con C++
+perf record -g --call-graph dwarf -p "$SLAM_PID" -o "$DATA" -- sleep "$SECS"
 
 echo "[..] Generando reportes..."
-# Arbol de llamadas completo
-perf report -i "$DATA" --stdio > "${RESULTS_DIR}/results_${MODE}_perfreport_full.txt" 2>/dev/null
-# Lista plana de funciones (sin arbol), mas facil de leer/parsear
-perf report -i "$DATA" --stdio -g none > "${RESULTS_DIR}/results_${MODE}_perfreport_flat.txt" 2>/dev/null
+# ARBOL de llamadas (la vista clave para el cuello de botella)
+perf report -i "$DATA" --stdio --percent-limit 1 2>/dev/null \
+    > "${RESULTS_DIR}/results_${MODE}_callgraph.txt"
+# Lista plana por self (complementaria)
+perf report -i "$DATA" --stdio -g none --percent-limit 0.5 2>/dev/null \
+    > "${RESULTS_DIR}/results_${MODE}_flat.txt"
 
-# ── Detener el SLAM ──────────────────────────────────────────────────────
 kill -INT "$LAUNCH_PID" 2>/dev/null
 sleep 3
 
-# ── Extraer las funciones clave a un CSV ─────────────────────────────────
-FLAT="${RESULTS_DIR}/results_${MODE}_perfreport_flat.txt"
+# ── Extraer funciones clave DEL ARBOL ────────────────────────────────────
+CG="${RESULTS_DIR}/results_${MODE}_callgraph.txt"
 CSV="${RESULTS_DIR}/results_${MODE}_bottleneck.csv"
-echo "funcion,porcentaje" > "$CSV"
+echo "funcion,porcentaje_arbol" > "$CSV"
 
-# Funciones de interes: el callback, dgemm (BLAS), inversa, y XRT/FPGA
-for pat in "fake_sensor_cb" "dgemm" "dgemv" "arma::blas" "arma::glue_times" \
-           "arma::inv" "arma::solve" "xrt" "xclbin" "sync_bo" "compute_PHt"; do
-    LINE=$(grep -i "$pat" "$FLAT" | head -1)
-    if [ -n "$LINE" ]; then
-        PCT=$(echo "$LINE" | grep -oE "[0-9]+\.[0-9]+%" | head -1 | tr -d '%')
-        echo "${pat},${PCT:-0}" >> "$CSV"
+# Funcion auxiliar: busca un patron en el arbol y saca el primer % de su linea
+extract() {
+    local pat="$1"
+    local line pct
+    line=$(grep -m1 -- "$pat" "$CG")
+    if [ -n "$line" ]; then
+        # el % en el arbol aparece como  --NN.NN%--  o como  NN.NN%
+        pct=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+%" | head -1 | tr -d '%')
+        echo "${pat},${pct:-0}" >> "$CSV"
     fi
-done
+}
+
+extract "fake_sensor_cb"
+extract "glue_times"
+extract "eglue_minus"
+extract "dgemm"
+extract "arma::inv"
+extract "arma::solve"
+extract "compute_PHt"
+extract "xrt::"
+extract "Cdr::serialize"
 
 echo ""
 echo "=================================================="
-echo " Cuello de botella ($MODE):"
+echo " Cuello de botella ($MODE) - extraido del arbol:"
 echo "=================================================="
 cat "$CSV"
 echo ""
-echo " Top 15 funciones (lista plana):"
-grep -E "^\s+[0-9]+\.[0-9]+%" "$FLAT" | head -15
+echo " --- Contexto del arbol (fake_sensor_cb y lo que cuelga) ---"
+grep -A 30 "fake_sensor_cb" "$CG" | head -35
 echo ""
 echo " Archivos en: $RESULTS_DIR"
