@@ -1,14 +1,11 @@
 #!/bin/bash
 # profile_bottleneck.sh
 #
-# Captura el PERFIL POR FUNCION del nodo slam con perf record y genera
-# la vista de ARBOL DE LLAMADAS (call-graph), que es donde se evidencia
-# el cuello de botella del EKF (fake_sensor_cb -> Armadillo -> dgemm).
-#
-# Genera en la carpeta de resultados:
-#   results_<mode>_callgraph.txt    (arbol de llamadas; la vista clave)
-#   results_<mode>_flat.txt         (lista plana por self, complementaria)
-#   results_<mode>_bottleneck.csv   (funciones clave extraidas del arbol)
+# Captura el perfil por funcion del nodo slam con perf record y genera
+# TRES vistas:
+#   results_<mode>_self.txt       <- lista por SELF time (dgemm_ al tope) [LA CLAVE]
+#   results_<mode>_callgraph.txt  <- arbol de llamadas (fake_sensor_cb -> arma -> dgemm)
+#   results_<mode>_bottleneck.csv <- funciones clave extraidas (por self)
 #
 # Uso:
 #   ./profile_bottleneck.sh armadillo [segundos]
@@ -58,55 +55,57 @@ fi
 echo "[ok] Nodo slam (PID $SLAM_PID). Grabando ${SECS}s con perf record..."
 
 DATA="${RESULTS_DIR}/perf.data"
-# -g  : habilita call-graph (arbol de llamadas)
-# --call-graph dwarf : mejor reconstruccion del arbol con C++
 perf record -g --call-graph dwarf -p "$SLAM_PID" -o "$DATA" -- sleep "$SECS"
 
-echo "[..] Generando reportes..."
-# ARBOL de llamadas (la vista clave para el cuello de botella)
-perf report -i "$DATA" --stdio --percent-limit 1 2>/dev/null \
-    > "${RESULTS_DIR}/results_${MODE}_callgraph.txt"
-# Lista plana por self (complementaria)
-perf report -i "$DATA" --stdio -g none --percent-limit 0.5 2>/dev/null \
-    > "${RESULTS_DIR}/results_${MODE}_flat.txt"
-
+# Detener el SLAM antes de generar reportes (libera CPU para que perf report sea rapido)
 kill -INT "$LAUNCH_PID" 2>/dev/null
 sleep 3
 
-# ── Extraer funciones clave DEL ARBOL ────────────────────────────────────
+echo "[..] Generando reportes..."
+SELF="${RESULTS_DIR}/results_${MODE}_self.txt"
 CG="${RESULTS_DIR}/results_${MODE}_callgraph.txt"
-CSV="${RESULTS_DIR}/results_${MODE}_bottleneck.csv"
-echo "funcion,porcentaje_arbol" > "$CSV"
 
-# Funcion auxiliar: busca un patron en el arbol y saca el primer % de su linea
+# 1) VISTA POR SELF (la clave: dgemm_ al tope, como en la imagen)
+perf report -i "$DATA" --stdio --no-children --percent-limit 0.5 2>/dev/null > "$SELF"
+
+# 2) ARBOL de llamadas (contexto: fake_sensor_cb -> arma -> dgemm)
+perf report -i "$DATA" --stdio --percent-limit 1 2>/dev/null > "$CG"
+
+# ── Extraer funciones clave de la vista por SELF ─────────────────────────
+CSV="${RESULTS_DIR}/results_${MODE}_bottleneck.csv"
+echo "funcion,self_pct" > "$CSV"
+
 extract() {
     local pat="$1"
+    # En la vista --no-children, la 1ra columna de % ES el self
     local line pct
-    line=$(grep -m1 -- "$pat" "$CG")
+    line=$(grep -m1 -- "$pat" "$SELF")
     if [ -n "$line" ]; then
-        # el % en el arbol aparece como  --NN.NN%--  o como  NN.NN%
         pct=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+%" | head -1 | tr -d '%')
         echo "${pat},${pct:-0}" >> "$CSV"
     fi
 }
 
-extract "fake_sensor_cb"
-extract "glue_times"
-extract "eglue_minus"
 extract "dgemm"
-extract "arma::inv"
-extract "arma::solve"
+extract "dgemv"
+extract "dtrsm"
+extract "fake_sensor_cb"
 extract "compute_PHt"
 extract "xrt::"
+extract "sync"
 extract "Cdr::serialize"
+extract "cdr_serialize"
 
 echo ""
 echo "=================================================="
-echo " Cuello de botella ($MODE) - extraido del arbol:"
+echo " Cuello de botella ($MODE) - por SELF time:"
 echo "=================================================="
 cat "$CSV"
 echo ""
-echo " --- Contexto del arbol (fake_sensor_cb y lo que cuelga) ---"
-grep -A 30 "fake_sensor_cb" "$CG" | head -35
+echo " --- Top 20 funciones por SELF (como la imagen) ---"
+grep -E "^\s+[0-9]+\.[0-9]+%" "$SELF" | head -20
 echo ""
 echo " Archivos en: $RESULTS_DIR"
+echo "   * results_${MODE}_self.txt      <- vista por self (para el TFG)"
+echo "   * results_${MODE}_callgraph.txt <- arbol de llamadas"
+echo "   * results_${MODE}_bottleneck.csv <- funciones clave"
